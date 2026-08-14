@@ -5,8 +5,8 @@
 <h1 align="center">FreeCoder</h1>
 
 <p align="center">
-  <strong>可完全免费、可完全离线的桌面 AI 编程助手</strong><br />
-  后端来自 xAI Grok Build · 面向中国用户做了完整国产化适配
+  <strong>廉价、好用的桌面 AI 编程助手</strong><br />
+  最高 1 亿免费 Token · 国内模型直连 · 也可完全本地、零 API 费用
 </p>
 
 <p align="center">
@@ -16,115 +16,99 @@
 <p align="center">
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6?logo=windows&logoColor=white" />
   <img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" />
-  <img alt="Local" src="https://img.shields.io/badge/Local-Free-26E0C8" />
-  <img alt="China" src="https://img.shields.io/badge/China-Ready-0F344B" />
+  <img alt="Free quota" src="https://img.shields.io/badge/Free_tokens-100M+-26E0C8" />
+  <img alt="China" src="https://img.shields.io/badge/国内直连-不担心封号-0F344B" />
 </p>
 
 ---
 
-FreeCoder 是一款桌面端 AI 编程 Agent。它能读写项目、执行命令、管理任务，并把「写代码」这件事交给真正的编码引擎——而不是套一层聊天框。
+## 核心优势
 
-双击安装即可使用。可以 **零费用跑本地模型**，也可以一键接入 **DeepSeek、阿里通义千问** 等国内云模型；需要时仍可使用 xAI Grok 等国际模型。
+**廉价、好用，双击就能上手。** 下面这些是 FreeCoder 要先讲清楚的：
 
-## 与 Grok 的关系
+| 优势 | 你实际得到什么 |
+|------|----------------|
+| **最高 1 亿免费 Token** | 阿里云百炼新用户活动，应用内协助领取（以官方规则为准） |
+| **免费额度能干活** | **编程任务、图像数据整理、生成图片、生成视频** |
+| **全是国内模型 API** | 国内直连，**不用担心网络，也不用担心封号** |
+| **DeepSeek 也极便宜** | 简单任务用 Flash，一次大约 **0.12 元**（不到一毛五） |
+| **也可以完全本地跑** | 本机加载本地模型推理，**API 上一分钱不用花** |
 
-FreeCoder 的 **Agent 后端是 xAI 的 [Grok Build](https://github.com/xai-org/grok-build)**。
+这些免费 Token 来自**国内云厂商**（阿里通义千问 / 百炼），不是海外账号：
 
-这与 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Cursor](https://cursor.com)、[OpenAI Codex](https://openai.com/codex) 属于同一代编码 Agent：由专业引擎规划、改文件、跑命令、循环直到任务完成。Grok Build 正是 xAI 这条技术路线上的实现。
+- **写代码、改仓库、跑命令** —— 编程 Agent
+- **整理、理解图片和截图** —— 多模态 / 图像数据整理
+- **生成图片** —— 如 Qwen Image
+- **生成视频** —— 如 HappyHorse
 
-桌面壳基于开源项目 [Grokx](https://github.com/tangf-ai/grokx) 演化而来。FreeCoder 在此之上做了面向中国用户的完整适配：
+不想走云、不想花 API 钱：打开本地推理即可，**完全免费**。
 
-| 上游 | FreeCoder 做了什么 |
-|------|-------------------|
-| xAI Grok Build | 保留同一套 Agent 引擎，国产化后 **编码能力与上游一致** |
-| Grokx 桌面 | 安装、模型、网络、权限按国内使用习惯重做 |
-| 本地 / 国内模型 | 默认可完全离开国际 API 独立工作 |
+## 后端是谁做的
 
-**结论：** 底层是 xAI 的先进 Agent 技术；表面是双击就能用的国产软件。不是「套皮聊天」，也不是把引擎换成别的东西。
+编码引擎来自 **xAI 的 [Grok Build](https://github.com/xai-org/grok-build)**，和 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Cursor](https://cursor.com)、[OpenAI Codex](https://openai.com/codex) 同属一代 Agent：规划、改文件、执行命令、循环直到做完。
 
-## 可以做到完全免费
+桌面是 **FreeCoder 自己的前端**。我们做了国产化适配：**双击安装就能用**，默认走国内模型，引擎能力与上游一致，不是换一套「套皮聊天」。
 
-装好后选本地模型即可，**不需要任何 API Key，也不产生云端费用**。
+## 国内模型，不用翻墙、不用担心封号
 
-默认本地模型为 **Bonsai 27B（1-bit）**，在本机 NVIDIA GPU（CUDA 12+）上推理。数据不出电脑，断网也能写代码。
+主路径就是国内 API，不为海外厂商准备使用门槛。
 
-### 本地模型的优势
+- **阿里通义千问（百炼）**：免费额度 + 按量。语言模型、多模态、生图、生视频都在国内。
+- **DeepSeek**：国内官方接口，价格低、延迟稳。日常小任务用 Flash 即可。
 
-- **费用为零**：不按 token 计费，适合长时间、大规模改仓库
-- **数据不出域**：源码、密钥、内部文档留在本机
-- **可用离线**：没有国际网络、没有代理也能工作
-- **延迟稳定**：不排队、不受云厂商限流
-- **合规简单**：适合对代码外传敏感的团队和个人
+设置里一键接入。不依赖必须翻墙的工作流，也不把日常使用绑在容易封号的海外账号上。
 
-云端模型适合「要更强推理、要生图生视频」的时刻；日常编码完全可以只靠本地，一分钱不用花。
+### 一键领取阿里免费 Token
 
-## 完全可以在国内使用
+设置 → **获取 API Key**：登录阿里云后，协助创建并回填百炼密钥。
 
-FreeCoder 按国内网络和国内云厂商做了适配，不依赖必须翻墙的工作流。
+新用户通过官方活动，**最高可领 1 亿 Token 以上**免费额度（以阿里云当时规则为准）。同一把 Key 覆盖编程、多模态、生图、生视频。额度由阿里云发放，FreeCoder 负责接到就能用。
 
-| 方式 | 费用 | 网络 | 典型能力 |
-|------|------|------|----------|
-| **本地 Bonsai** | 免费 | 可离线 | 编程、识图、私有代码 |
-| **DeepSeek** | Flash 简单任务约 **0.12 元** | 国内直连 | 强推理编程（V4 Flash / Pro） |
-| **阿里通义千问** | 免费额度 + 按量 | 国内直连 | 语言模型、多模态、生图、生视频 |
-| xAI Grok 等 | 按量 | 视网络环境 | 需要时再开 |
+### DeepSeek：简单任务大约一毛二
 
-DeepSeek 走国内官方接口，价格极低、延迟稳，适合作为本地模型之外的「云端主力」。简单任务用 Flash，一次往往 **不到一毛五**（见下节）。  
-通义千问走阿里云百炼，覆盖文本、视觉、图像生成和视频生成，同一套桌面里切换即可。
-
-## DeepSeek 有多便宜
-
-价格来自 DeepSeek 官方文档 [模型 & 价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)，单位：**元 / 百万 tokens**。
+价格见官方 [模型 & 价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)，单位：元 / 百万 tokens。
 
 | 模型 | 输入（缓存命中） | 输入（未命中） | 输出 |
 |------|------------------|----------------|------|
 | **deepseek-v4-flash** | 0.02 元 | **1 元** | **2 元** |
 | deepseek-v4-pro | 0.025 元 | 3 元 | 6 元 |
 
-日常小改动请用 **Flash**：修一个小 bug、补一个函数、解释一小段代码，Agent 一轮下来通常 **不到 10 万 token**。
+小改动用 **Flash**（修 bug、补函数、看一小段代码），一轮通常 **不到 10 万 token**。按缓存全未命中的保守估：
 
-按偏保守、且 **完全不命中缓存** 来估：
-
-| | Token | 单价 | 费用 |
-|--|------:|------|------:|
+| 项目 | Token | 单价 | 费用 |
+|------|------:|------|------:|
 | 输入 | 80,000 | 1 元 / 百万 | **0.08 元** |
 | 输出 | 20,000 | 2 元 / 百万 | **0.04 元** |
-| **合计（约 10 万 token）** | 100,000 | | **0.12 元** |
+| **合计** | 100,000 | | **0.12 元** |
 
-> **一次简单编程任务，大约一毛二。**  
-> 一块钱能跑约 **8 次**；充 **10 元**，日常小任务可以跑 **80 次** 量级。  
-> 这还是「缓存全未命中」的高估；对话变长后缓存命中，输入可降到 0.02 元 / 百万，会更便宜。
+> **一次简单编程任务约一毛二。** 一块钱大约 8 次；充 10 元大约 80 次。  
+> 这还是高估：缓存命中后输入可降到 0.02 元 / 百万。长任务再换 Pro。
 
-复杂重构、超长仓库再换 **Pro**。官方将于 **2026-08-17** 起实行峰谷价（高峰约为现价 3～4.5 倍）。即便按调整后 Flash **高峰** 的同一 10 万 token 任务来算，大约 **0.42 元**，仍不到五毛钱。以官网当时标价为准。
+2026-08-17 起官方实行峰谷价。即便按 Flash 高峰估同一任务，大约 **0.42 元**，仍不到五毛。以官网当时标价为准。
 
-## 一键领取阿里千问免费 Token
+## 完全本地：API 零费用
 
-设置里提供 **「获取 API Key」**：登录阿里云后，FreeCoder 会协助创建并回填百炼密钥，用来激活通义千问相关模型。
+FreeCoder **支持在本机加载并运行本地模型**。不连云、不申请 Key，也可以完成编程任务。
 
-新用户通过阿里云百炼官方活动，**最高可领取亿级（1 亿 Token 以上）免费额度**（以阿里云当时活动规则为准）。同一把 Key 可覆盖：
+- **完全免费**：不按 token 计费
+- **数据不出电脑**：源码留在本机
+- **断网也能用**：不依赖国际网络
 
-- **大语言模型**：如 Qwen 3.7 Plus / Max / Flash
-- **多模态模型**：理解图片与界面截图
-- **生图**：Qwen Image
-- **生视频**：HappyHorse 等
+云端适合要更强模型、要生图生视频、要花免费额度的时候；日常编码可以全程本地，**API 一分钱不用花**。
 
-应用内可查看各模型的官方免费额度页面。额度由阿里云发放，FreeCoder 只负责把国内模型「接到就能用」。
+## 怎么用
 
-## 使用体验
+**双击安装包即可。** 不用先装开发环境，也不用自己编译引擎。
 
-面向最终用户：**双击安装包，打开即可写代码**。本地运行时与引擎、模型已打包好，无需先装 Rust / Node，也无需自己编译 Grok Build。
+- 要免费额度：设置里领阿里百炼 Key，即可编程 / 理图 / 生图 / 生视频
+- 要更便宜的国内编程：接 DeepSeek Flash
+- 要零成本：开本地模型推理
 
-- 安装后即可选用本地免费模型
-- 设置中添加 DeepSeek 或阿里百炼，国内云模型马上可用
-- 权限模式：需审批 / 自动 / 完全信任
-- 多任务并行：切换窗口时后台任务继续跑
-- 生图 / 生视频默认走百炼媒体能力，结果落在本机任务目录
-
-开发者若从本仓库构建前端，见下方「从源码运行」。
+权限可调（需审批 / 自动 / 完全信任），多任务可在后台继续跑。
 
 ## 从源码运行
 
-本仓库公开的是 **桌面前端**（Tauri 2 + React + Rust crates），并附带可调用的 `media-mcp.exe`。不含后端引擎源码与云端密钥。
+本仓库开源的是 **桌面前端**（Tauri 2 + React + Rust），并附带可调用的 `media-mcp.exe`。不含引擎源码和任何云端密钥。
 
 ```powershell
 cd frontend\apps\desktop
@@ -132,14 +116,10 @@ pnpm install
 pnpm tauri dev
 ```
 
-环境：Windows 10/11 x64、Rust stable、Node.js 20+、pnpm、WebView2。本地模型需 NVIDIA 显卡（CUDA 12+，建议显存 ≥ 8GB）。
+Windows 10/11 x64、Rust stable、Node.js 20+、pnpm、WebView2。本地推理建议 NVIDIA GPU（CUDA 12+）。API Key 只保存在本机，请勿写入仓库。
 
-API Key 只保存在本机设置中，请勿写入仓库。
+## 许可证
 
-## 许可证与致谢
+产品代码 [Apache-2.0](LICENSE)。Agent 引擎上游为 [Grok Build](https://github.com/xai-org/grok-build)（Apache-2.0，见 [NOTICE](NOTICE)）。
 
-- 产品代码：[Apache-2.0](LICENSE)
-- Agent 引擎上游：[Grok Build](https://github.com/xai-org/grok-build)（Apache-2.0，见 [NOTICE](NOTICE)）
-- 桌面壳上游：[Grokx](https://github.com/tangf-ai/grokx)
-
-FreeCoder 不是 xAI 官方产品。Grok、Grok Build 为 xAI 的商标或项目名称；Claude Code、Cursor、Codex 为各自权利人的产品。阿里云百炼免费额度以阿里云官方说明为准。DeepSeek 价格以 [官方价目](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) 为准。
+FreeCoder 不是 xAI 官方产品。Claude Code、Cursor、Codex 为各自权利人的产品。阿里云百炼免费额度、DeepSeek 价格分别以 [阿里云](https://bailian.console.aliyun.com) 与 [DeepSeek 价目](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) 为准。

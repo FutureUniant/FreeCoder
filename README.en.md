@@ -106,18 +106,6 @@ Use the cloud when you want stronger models, image/video, or the free quota. Eve
 
 Permission modes: ask / auto / full trust. Tasks can keep running in the background.
 
-## Run from source
-
-This repository publishes the **desktop frontend** (Tauri 2 + React + Rust) plus a callable `media-mcp.exe`. It does not include engine source or cloud secrets.
-
-```powershell
-cd frontend\apps\desktop
-pnpm install
-pnpm tauri dev
-```
-
-Windows 10/11 x64, Rust stable, Node.js 20+, pnpm, WebView2. Local inference: NVIDIA GPU (CUDA 12+) recommended. Keep API keys in local Settings.
-
 ## License
 
 Product code [Apache-2.0](LICENSE). Agent engine upstream: [Grok Build](https://github.com/xai-org/grok-build) (Apache-2.0, see [NOTICE](NOTICE)).

@@ -106,18 +106,6 @@ FreeCoder **支持在本机加载并运行本地模型**。不连云、不申请
 
 权限可调（需审批 / 自动 / 完全信任），多任务可在后台继续跑。
 
-## 从源码运行
-
-本仓库开源的是 **桌面前端**（Tauri 2 + React + Rust），并附带可调用的 `media-mcp.exe`。不含引擎源码和任何云端密钥。
-
-```powershell
-cd frontend\apps\desktop
-pnpm install
-pnpm tauri dev
-```
-
-Windows 10/11 x64、Rust stable、Node.js 20+、pnpm、WebView2。本地推理建议 NVIDIA GPU（CUDA 12+）。API Key 只保存在本机，请勿写入仓库。
-
 ## 许可证
 
 产品代码 [Apache-2.0](LICENSE)。Agent 引擎上游为 [Grok Build](https://github.com/xai-org/grok-build)（Apache-2.0，见 [NOTICE](NOTICE)）。

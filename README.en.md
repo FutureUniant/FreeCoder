@@ -84,7 +84,7 @@ Use **Flash** for small edits (bugfix, helper function, a short read). One pass 
 > **A simple coding task is about twelve cents (CNY).** ¥1 ≈ 8 tasks; ¥10 ≈ 80.  
 > This is a high estimate: cache hits drop input to ¥0.02 / million. Use Pro for long jobs.
 
-Peak/off-peak pricing starts 2026-08-17. Even at Flash **peak**, the same job is about **¥0.42**. Live tariff is on the official page.
+Prices follow the official page at the time you use it.
 
 ## Fully local: zero API spend
 

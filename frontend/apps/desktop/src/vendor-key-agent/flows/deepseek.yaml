@@ -1,0 +1,113 @@
+id: deepseek
+name: DeepSeek
+home_url: https://platform.deepseek.com
+api_keys_url: https://platform.deepseek.com/api_keys
+test_endpoint: https://api.deepseek.com/models
+test_auth_header: Authorization
+test_auth_prefix: "Bearer "
+openai_base_url: https://api.deepseek.com
+
+steps:
+  - type: navigate
+    url: https://platform.deepseek.com/api_keys
+    wait_ms: 1000
+    message: 正在打开 DeepSeek API Keys 页面…
+
+  - type: wait_login
+    message: 请在浏览器中完成登录；登录后将自动回到 API Key 页并开始获取（最长 10 分钟）
+    timeout_ms: 600000
+    poll_ms: 1500
+    stable_polls: 2
+    require_enabled: true
+    revisit_url: https://platform.deepseek.com/api_keys
+    revisit_every_ms: 8000
+    url_includes:
+      - platform.deepseek.com
+    url_path_includes:
+      - /api_keys
+    url_excludes:
+      - /sign_in
+      - accounts.google
+      - accounts.google.com
+    # 避免过宽拒绝词（如单独 "Sign in"）把已登录页误判回去
+    deny_texts:
+      - "验证码登录"
+      - "密码登录"
+      - "手机号登录"
+      - "Sign in to DeepSeek"
+      - "Log in to DeepSeek"
+      - "Send code"
+    texts:
+      - "Create new API key"
+      - "Create new secret key"
+      - "Create API key"
+      - "Create API Key"
+      - "+ Create new API key"
+      - "创建 API Key"
+      - "创建 API key"
+      - "创建密钥"
+      - "创建新的 API key"
+    ready_markers:
+      - "Create new API key"
+      - "Create API key"
+      - "API Keys"
+      - "API keys"
+      - "创建 API Key"
+      - "创建 API key"
+
+  - type: navigate
+    url: https://platform.deepseek.com/api_keys
+    wait_ms: 1500
+    message: 正在进入 API Keys 管理页…
+
+  - type: dismiss_modal
+    texts:
+      - "稍后再填"
+      - "Fill in later"
+      - "以后再说"
+      - "跳过"
+      - "暂不绑定"
+    optional: true
+    timeout_ms: 4000
+    message: 关闭绑定邮箱弹窗…
+
+  - type: auto_click
+    texts:
+      - "Create new API key"
+      - "Create new secret key"
+      - "Create API key"
+      - "Create API Key"
+      - "+ Create new API key"
+      - "创建 API Key"
+      - "创建 API key"
+      - "创建密钥"
+      - "创建新的 API key"
+    timeout_ms: 45000
+    message: 点击创建 API Key…
+
+  - type: sleep
+    ms: 600
+
+  - type: auto_fill
+    selector: 'input[placeholder*="name" i], input[placeholder*="Name"], input[placeholder*="名称"], .ant-modal input[type="text"]:visible, [role="dialog"] input[type="text"]:visible'
+    value: FreeCoder-{{timestamp}}
+    optional: true
+    timeout_ms: 8000
+    message: 填写默认名称…
+
+  - type: modal_confirm
+    timeout_ms: 12000
+    message: 确认创建 API Key…
+
+  - type: sleep
+    ms: 1000
+
+  - type: extract
+    patterns:
+      - 'sk-[A-Za-z0-9]{16,}'
+      - 'sk-[A-Za-z0-9._-]{16,}'
+    timeout_ms: 45000
+    message: 提取 API Key…
+    default_config:
+      apiHost: api.deepseek.com
+      openaiBaseUrl: https://api.deepseek.com

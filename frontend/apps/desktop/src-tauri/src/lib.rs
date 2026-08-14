@@ -1,0 +1,2237 @@
+mod vendor_key_agent;
+mod extensions;
+mod dependencies;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use agent_process::EngineSource;
+use vendor_key_agent::VendorKeyAgentState;
+use app_config::{PublicUserSettings, SettingsUpdate};
+use app_core::AppCore;
+use llm_runtime::LocalRuntimeStatus;
+use base64::Engine as _;
+use domain::{
+    PermissionDecision, ProjectId, PromptAttachment, PromptRequest, ReasoningEffort,
+    SessionId,
+};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager, State};
+use uuid::Uuid;
+
+struct CoreState(Arc<AppCore>);
+
+#[derive(Debug, Serialize)]
+struct EngineInfo {
+    path: String,
+    source: String,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionInfo {
+    session_id: String,
+    project_root: Option<String>,
+    /// App-owned task metadata dir (`<project>/.grokx/tasks/<id>`); agent cwd is project_root.
+    work_path: Option<String>,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionListRow {
+    session_id: String,
+    project_id: String,
+    project_root: String,
+    project_name: String,
+    work_path: String,
+    title: String,
+    engine_session_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectListRow {
+    project_id: String,
+    name: String,
+    root_path: String,
+    session_count: usize,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ModelOption {
+    id: String,
+    name: String,
+}
+
+#[derive(Debug, Serialize)]
+struct EffortOption {
+    id: String,
+    label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AttachmentInput {
+    path: String,
+    name: Option<String>,
+    mime: Option<String>,
+    size: Option<u64>,
+    /// Directory path chip (Cursor-style folder reference).
+    #[serde(default)]
+    is_dir: Option<bool>,
+}
+
+/// Browser clipboard paste of image/file bytes (base64).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PastedAttachmentInput {
+    /// Raw base64 (no data: URL prefix).
+    data_base64: String,
+    mime: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SendPromptInput {
+    text: String,
+    #[serde(default)]
+    attachments: Vec<AttachmentInput>,
+    model: Option<String>,
+    effort: Option<String>,
+}
+
+fn resource_dir(app: &AppHandle) -> Option<PathBuf> {
+    // Tauri resource_dir → typically Contents/Resources in a .app bundle.
+    // Bundled runtime may live at Resources/runtime/grok OR
+    // Resources/resources/runtime/grok depending on tauri.conf resources paths.
+    app.path().resource_dir().ok().or_else(|| {
+        Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources"))
+    })
+}
+
+fn parse_session_id(s: &str) -> Result<SessionId, String> {
+    let u = Uuid::parse_str(s).map_err(|e| format!("invalid session id: {e}"))?;
+    Ok(SessionId(u))
+}
+
+fn parse_project_id(s: &str) -> Result<ProjectId, String> {
+    let u = Uuid::parse_str(s).map_err(|e| format!("invalid project id: {e}"))?;
+    Ok(ProjectId(u))
+}
+
+#[tauri::command]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+async fn resolve_engine(
+    app: AppHandle,
+    core: State<'_, CoreState>,
+) -> Result<EngineInfo, String> {
+    let resource_dir = resource_dir(&app);
+    // Always allow PATH fallback as last resort so packaged apps still work
+    // when resource layout differs or users have a local grok install.
+    let allow_path = true;
+
+    match core
+        .0
+        .resolve_runtime(resource_dir.as_deref(), allow_path)
+        .await
+    {
+        Ok(engine) => {
+            let source = match engine.source {
+                EngineSource::Bundled => "bundled",
+                EngineSource::Custom => "custom",
+                EngineSource::Path => "path",
+            };
+            Ok(EngineInfo {
+                path: engine.path.display().to_string(),
+                source: source.to_string(),
+                status: core.0.connection_status().await.to_string(),
+            })
+        }
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn set_project_root(
+    core: State<'_, CoreState>,
+    project_root: String,
+) -> Result<String, String> {
+    let path = core
+        .0
+        .set_project_root(PathBuf::from(project_root))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
+/// Create/select `~/.grokx/workspace` so a task can start without folder picker.
+#[tauri::command]
+async fn ensure_default_project(core: State<'_, CoreState>) -> Result<String, String> {
+    let path = core
+        .0
+        .ensure_default_project()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
+/// Native folder picker for opening a project (fixed path). No free-text path needed.
+#[tauri::command]
+async fn pick_project_dir(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let folder = app
+        .dialog()
+        .file()
+        .set_title("Open project")
+        .blocking_pick_folder();
+    let Some(folder) = folder else {
+        return Ok(None);
+    };
+    let path = folder
+        .into_path()
+        .map_err(|e| format!("invalid folder path: {e}"))?;
+    Ok(Some(path.display().to_string()))
+}
+
+#[tauri::command]
+async fn list_sessions(core: State<'_, CoreState>) -> Result<Vec<SessionListRow>, String> {
+    let items = core.0.list_sessions().await;
+    Ok(items
+        .into_iter()
+        .map(|s| SessionListRow {
+            session_id: s.session_id.0.to_string(),
+            project_id: s.project_id.0.to_string(),
+            project_root: s.project_root,
+            project_name: s.project_name,
+            work_path: s.work_path,
+            title: s.title,
+            engine_session_id: s.engine_session_id,
+            created_at: s.created_at.to_rfc3339(),
+            updated_at: s.updated_at.to_rfc3339(),
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn list_projects(core: State<'_, CoreState>) -> Result<Vec<ProjectListRow>, String> {
+    let items = core.0.list_projects().await;
+    Ok(items
+        .into_iter()
+        .map(|p| ProjectListRow {
+            project_id: p.project_id.0.to_string(),
+            name: p.name,
+            root_path: p.root_path,
+            session_count: p.session_count,
+            updated_at: p.updated_at.to_rfc3339(),
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn list_sessions_for_project(
+    core: State<'_, CoreState>,
+    project_id: String,
+) -> Result<Vec<SessionListRow>, String> {
+    let pid = parse_project_id(&project_id)?;
+    let items = core.0.list_sessions_for_project(&pid).await;
+    Ok(items
+        .into_iter()
+        .map(|s| SessionListRow {
+            session_id: s.session_id.0.to_string(),
+            project_id: s.project_id.0.to_string(),
+            project_root: s.project_root,
+            project_name: s.project_name,
+            work_path: s.work_path,
+            title: s.title,
+            engine_session_id: s.engine_session_id,
+            created_at: s.created_at.to_rfc3339(),
+            updated_at: s.updated_at.to_rfc3339(),
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn rename_session(
+    core: State<'_, CoreState>,
+    session_id: String,
+    title: String,
+) -> Result<(), String> {
+    let sid = parse_session_id(&session_id)?;
+    core.0
+        .rename_session(&sid, title)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_session(
+    core: State<'_, CoreState>,
+    session_id: String,
+) -> Result<(), String> {
+    let sid = parse_session_id(&session_id)?;
+    core.0
+        .delete_session(&sid)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Remove a project from the sidebar (and all of its tasks). Does not delete
+/// the source folder on disk.
+#[tauri::command]
+async fn delete_project(
+    core: State<'_, CoreState>,
+    project_id: String,
+) -> Result<(), String> {
+    let pid = parse_project_id(&project_id)?;
+    core.0
+        .delete_project(&pid)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Persist chat transcript JSON for a task (under its work_path).
+#[tauri::command]
+async fn save_chat_history(
+    core: State<'_, CoreState>,
+    session_id: String,
+    json: String,
+    work_path: Option<String>,
+) -> Result<(), String> {
+    let sid = parse_session_id(&session_id)?;
+    core.0
+        .save_chat_history(&sid, json, work_path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Load chat transcript JSON for a task, if any.
+#[tauri::command]
+async fn load_chat_history(
+    core: State<'_, CoreState>,
+    session_id: String,
+    work_path: Option<String>,
+) -> Result<Option<String>, String> {
+    let sid = parse_session_id(&session_id)?;
+    core.0
+        .load_chat_history(&sid, work_path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn connect_workspace(
+    app: AppHandle,
+    core: State<'_, CoreState>,
+    project_root: Option<String>,
+    auto_approve: Option<bool>,
+) -> Result<SessionInfo, String> {
+    let selected = core.0.selected_project_root().await;
+    let root = project_root
+        .map(PathBuf::from)
+        .or(selected)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    // Prefer bundled engine; PATH is a last-resort fallback (see resolve_engine).
+    let allow_path = true;
+    // Default OFF for real permission flow; UI can opt into auto-approve.
+    let auto_approve = auto_approve.unwrap_or(false);
+
+    let session_id = core
+        .0
+        .connect_workspace(
+            root.clone(),
+            resource_dir(&app),
+            allow_path,
+            auto_approve,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let work_path = core
+        .0
+        .current_work_path()
+        .await
+        .map(|p| p.display().to_string());
+    Ok(SessionInfo {
+        session_id: session_id.0.to_string(),
+        project_root: Some(root.display().to_string()),
+        work_path,
+        status: core.0.connection_status().await.to_string(),
+    })
+}
+
+#[tauri::command]
+async fn reconnect_session(
+    app: AppHandle,
+    core: State<'_, CoreState>,
+    session_id: String,
+    auto_approve: Option<bool>,
+) -> Result<SessionInfo, String> {
+    let sid = parse_session_id(&session_id)?;
+    let allow_path = true;
+    let auto_approve = auto_approve.unwrap_or(false);
+    let new_id = core
+        .0
+        .reconnect_session(&sid, resource_dir(&app), allow_path, auto_approve)
+        .await
+        .map_err(|e| e.to_string())?;
+    let project_root = core
+        .0
+        .current_project_root()
+        .await
+        .map(|p| p.display().to_string());
+    let work_path = core
+        .0
+        .current_work_path()
+        .await
+        .map(|p| p.display().to_string());
+    Ok(SessionInfo {
+        session_id: new_id.0.to_string(),
+        project_root,
+        work_path,
+        status: core.0.connection_status().await.to_string(),
+    })
+}
+
+#[tauri::command]
+async fn send_prompt(core: State<'_, CoreState>, text: String) -> Result<(), String> {
+    core.0.send_prompt(text).await.map_err(|e| e.to_string())
+}
+
+/// Side chat / `/btw` — does not write to main session transcript.
+/// Returns `{ answer, thinking? }`.
+#[tauri::command]
+async fn send_btw(
+    core: State<'_, CoreState>,
+    question: String,
+) -> Result<serde_json::Value, String> {
+    let (answer, thinking) = core.0.send_btw(question).await.map_err(|e| e.to_string())?;
+    let mut v = serde_json::json!({ "answer": answer });
+    if let Some(t) = thinking.filter(|s| !s.trim().is_empty()) {
+        v["thinking"] = serde_json::Value::String(t);
+    }
+    Ok(v)
+}
+
+#[tauri::command]
+async fn send_prompt_rich(
+    core: State<'_, CoreState>,
+    payload: SendPromptInput,
+) -> Result<(), String> {
+    let effort = payload
+        .effort
+        .as_deref()
+        .and_then(ReasoningEffort::parse);
+    let attachments = payload
+        .attachments
+        .into_iter()
+        .map(|a| {
+            let path = std::path::PathBuf::from(&a.path);
+            let name = a.name.unwrap_or_else(|| {
+                path.file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| a.path.clone())
+            });
+            let size = a.size.or_else(|| std::fs::metadata(&path).ok().map(|m| m.len()));
+            PromptAttachment {
+                path: a.path,
+                name,
+                mime: a.mime,
+                size,
+                is_dir: a.is_dir.unwrap_or(false),
+            }
+        })
+        .collect();
+    core.0
+        .send_prompt_request(PromptRequest {
+            text: payload.text,
+            attachments,
+            model: payload.model,
+            effort,
+        })
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_models(core: State<'_, CoreState>) -> Result<Vec<ModelOption>, String> {
+    let models = core.0.configured_models().await;
+    Ok(models
+        .into_iter()
+        .map(|m| ModelOption {
+            id: m.id,
+            name: m.name,
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn current_model(core: State<'_, CoreState>) -> Result<Option<String>, String> {
+    Ok(core.0.current_model().await)
+}
+
+#[tauri::command]
+async fn set_model(core: State<'_, CoreState>, model_id: String) -> Result<(), String> {
+    core.0.set_model(model_id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_efforts() -> Vec<EffortOption> {
+    AppCore::effort_options()
+        .into_iter()
+        .map(|e| EffortOption {
+            id: e.as_str().to_string(),
+            label: e.label().to_string(),
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn get_settings(core: State<'_, CoreState>) -> Result<PublicUserSettings, String> {
+    Ok(core.0.public_settings().await)
+}
+
+#[tauri::command]
+fn local_llm_hardware_tune(core: State<'_, CoreState>) -> llm_runtime::HardwareTune {
+    core.0.bonsai_hardware_tune()
+}
+
+#[tauri::command]
+async fn save_settings(
+    core: State<'_, CoreState>,
+    update: SettingsUpdate,
+) -> Result<PublicUserSettings, String> {
+    core.0
+        .update_settings(update)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ensure_local_llm(core: State<'_, CoreState>) -> Result<String, String> {
+    let roots = local_llm_search_roots();
+    let status = core
+        .0
+        .ensure_local_llm(&roots)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(format_local_status(&status))
+}
+
+#[tauri::command]
+async fn local_llm_status(core: State<'_, CoreState>) -> Result<String, String> {
+    Ok(format_local_status(&core.0.local_llm_status().await))
+}
+
+#[tauri::command]
+async fn stop_local_llm(core: State<'_, CoreState>) -> Result<(), String> {
+    core.0.stop_local_llm().await;
+    Ok(())
+}
+
+fn format_local_status(status: &LocalRuntimeStatus) -> String {
+    match status {
+        LocalRuntimeStatus::Stopped => "stopped".into(),
+        LocalRuntimeStatus::Starting => "starting".into(),
+        LocalRuntimeStatus::Ready => "ready".into(),
+        LocalRuntimeStatus::Failed { message } => format!("failed:{message}"),
+    }
+}
+
+fn local_llm_search_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    // Prefer the product install root (models/llama-prism-win-cuda12 lives here).
+    roots.push(app_config::AppPaths::product_install_root());
+    if let Some(deps) = dependencies::deps_search_root() {
+        if !roots.iter().any(|r| r == &deps) {
+            roots.push(deps);
+        }
+    }
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // frontend/apps/desktop/src-tauri → repo root
+    for ancestor in manifest.ancestors().take(8) {
+        let p = ancestor.to_path_buf();
+        if !roots.iter().any(|r| r == &p) {
+            roots.push(p);
+        }
+    }
+    roots.push(manifest.join("resources"));
+    if let Ok(cwd) = std::env::current_dir() {
+        if !roots.iter().any(|r| r == &cwd) {
+            roots.push(cwd);
+        }
+    }
+    roots
+}
+
+/// Read the raw Grok engine config (`~/.grok/config.toml`) for the Settings editor.
+#[tauri::command]
+fn read_grok_config() -> Result<GrokConfigFile, String> {
+    let path = app_config::AppPaths::grok_cli_config();
+    let path_str = path.display().to_string();
+    if !path.exists() {
+        return Ok(GrokConfigFile {
+            path: path_str,
+            content: String::new(),
+            exists: false,
+        });
+    }
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    Ok(GrokConfigFile {
+        path: path_str,
+        content,
+        exists: true,
+    })
+}
+
+/// Write the raw Grok engine config. Only allows the standard `~/.grok/config.toml` path.
+#[tauri::command]
+fn write_grok_config(content: String) -> Result<GrokConfigFile, String> {
+    let path = app_config::AppPaths::grok_cli_config();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    // Basic sanity: reject NULs which break most editors / TOML parsers.
+    if content.contains('\0') {
+        return Err("config content must not contain null bytes".into());
+    }
+    std::fs::write(&path, content.as_bytes())
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(GrokConfigFile {
+        path: path.display().to_string(),
+        content,
+        exists: true,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GrokConfigFile {
+    path: String,
+    content: String,
+    exists: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProbeEndpointArgs {
+    /// Base URL from the form, e.g. `http://host:port/v1`
+    base_url: String,
+    /// Optional key typed in the form (takes precedence over saved settings).
+    api_key: Option<String>,
+    /// Optional env var name to read the key from when form key is empty.
+    env_key: Option<String>,
+    /// When form key is blank, use the key stored in app settings.
+    use_saved_key: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EndpointProbeResult {
+    ok: bool,
+    status: u16,
+    message: String,
+    models_url: String,
+    latency_ms: u64,
+    model_count: Option<usize>,
+    /// First few model ids for a quick glance.
+    sample_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RemoteModelInfo {
+    id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FetchModelsResult {
+    ok: bool,
+    status: u16,
+    message: String,
+    models_url: String,
+    models: Vec<RemoteModelInfo>,
+}
+
+fn normalize_openai_base(raw: &str) -> Result<String, String> {
+    let mut s = raw.trim().to_string();
+    if s.is_empty() {
+        return Err("Base URL is empty".into());
+    }
+    // Accept host without scheme.
+    if !s.contains("://") {
+        s = format!("http://{s}");
+    }
+    while s.ends_with('/') {
+        s.pop();
+    }
+    Ok(s)
+}
+
+fn models_url_from_base(base: &str) -> String {
+    // base is expected like …/v1 (or …/v1/ already trimmed)
+    if base.ends_with("/models") {
+        base.to_string()
+    } else {
+        format!("{base}/models")
+    }
+}
+
+fn normalize_base_for_match(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+    if !s.contains("://") && !s.is_empty() {
+        s = format!("http://{s}");
+    }
+    while s.ends_with('/') {
+        s.pop();
+    }
+    s.to_ascii_lowercase()
+}
+
+async fn resolve_probe_api_key(
+    core: &CoreState,
+    form_key: Option<&str>,
+    env_key: Option<&str>,
+    use_saved: bool,
+    base_url: Option<&str>,
+) -> Option<String> {
+    let form = form_key.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(k) = form {
+        return Some(k.to_string());
+    }
+    // Local llama-server accepts a placeholder key.
+    let base_l = base_url
+        .map(normalize_base_for_match)
+        .unwrap_or_default();
+    if base_l.contains("127.0.0.1:8080") || base_l.contains("localhost:8080") {
+        return Some("local".into());
+    }
+    if use_saved {
+        if let Ok(full) = app_config::UserSettings::load(&core.0.paths.config_file) {
+            let want = normalize_base_for_match(base_url.unwrap_or(""));
+            // Prefer a profile whose base_url matches the form being probed.
+            if !want.is_empty() {
+                for p in full
+                    .model_profiles
+                    .iter()
+                    .chain(std::iter::once(&full.endpoint))
+                {
+                    let pb = p
+                        .base_url
+                        .as_deref()
+                        .map(normalize_base_for_match)
+                        .unwrap_or_default();
+                    if pb == want {
+                        if let Some(k) = p
+                            .api_key
+                            .as_ref()
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                        {
+                            return Some(k.to_string());
+                        }
+                        if let Some(ek) = p
+                            .env_key
+                            .as_ref()
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                        {
+                            if let Ok(v) = std::env::var(ek) {
+                                if !v.trim().is_empty() {
+                                    return Some(v);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(k) = full
+                .endpoint
+                .api_key
+                .as_ref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                return Some(k.to_string());
+            }
+            if let Some(ek) = full
+                .endpoint
+                .env_key
+                .as_ref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                if let Ok(v) = std::env::var(ek) {
+                    if !v.trim().is_empty() {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(ek) = env_key.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Ok(v) = std::env::var(ek) {
+            if !v.trim().is_empty() {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+async fn http_get_models(
+    models_url: &str,
+    api_key: Option<&str>,
+) -> Result<(u16, String, u64), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+    let mut req = client.get(models_url);
+    if let Some(k) = api_key.map(str::trim).filter(|s| !s.is_empty()) {
+        req = req.header("Authorization", format!("Bearer {k}"));
+    }
+    let started = std::time::Instant::now();
+    let resp = req.send().await.map_err(|e| format!("request failed: {e}"))?;
+    let status = resp.status().as_u16();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("read body: {e}"))?;
+    let latency_ms = started.elapsed().as_millis() as u64;
+    Ok((status, body, latency_ms))
+}
+
+fn parse_models_list(body: &str) -> Vec<RemoteModelInfo> {
+    let mut out = Vec::new();
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return out;
+    };
+    let arr = if let Some(a) = v.get("data").and_then(|d| d.as_array()) {
+        a.clone()
+    } else if let Some(a) = v.as_array() {
+        a.clone()
+    } else if let Some(a) = v.get("models").and_then(|d| d.as_array()) {
+        a.clone()
+    } else {
+        return out;
+    };
+    for item in arr {
+        let id = item
+            .get("id")
+            .and_then(|x| x.as_str())
+            .or_else(|| item.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if id.is_empty() {
+            continue;
+        }
+        // Prefer display_name; `name` is often JSON null on OpenAI-compatible APIs.
+        let name = ["display_name", "name", "title", "id"]
+            .into_iter()
+            .find_map(|k| {
+                item.get(k)
+                    .and_then(|x| x.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| id.clone());
+        out.push(RemoteModelInfo { id, name });
+    }
+    out
+}
+
+/// GET `{base}/models` — validates endpoint + key without sending a chat.
+#[tauri::command]
+async fn test_endpoint(
+    core: State<'_, CoreState>,
+    args: ProbeEndpointArgs,
+) -> Result<EndpointProbeResult, String> {
+    let base = normalize_openai_base(&args.base_url)?;
+    let models_url = models_url_from_base(&base);
+    let key = resolve_probe_api_key(
+        &core,
+        args.api_key.as_deref(),
+        args.env_key.as_deref(),
+        args.use_saved_key.unwrap_or(true),
+        Some(&base),
+    )
+    .await;
+    if key.is_none() {
+        return Ok(EndpointProbeResult {
+            ok: false,
+            status: 0,
+            message: "No API key (type one, or save a key first / set env key)".into(),
+            models_url,
+            latency_ms: 0,
+            model_count: None,
+            sample_ids: vec![],
+        });
+    }
+    let (status, body, latency_ms) =
+        http_get_models(&models_url, key.as_deref()).await?;
+    let models = parse_models_list(&body);
+    let ok = (200..300).contains(&status);
+    let message = if ok {
+        format!(
+            "OK · HTTP {status} · {} model(s) · {latency_ms} ms",
+            models.len()
+        )
+    } else {
+        let snippet: String = body.chars().take(180).collect();
+        format!("HTTP {status} · {snippet}")
+    };
+    let sample_ids: Vec<String> = models.iter().take(8).map(|m| m.id.clone()).collect();
+    Ok(EndpointProbeResult {
+        ok,
+        status,
+        message,
+        models_url,
+        latency_ms,
+        model_count: if ok { Some(models.len()) } else { None },
+        sample_ids,
+    })
+}
+
+/// GET `{base}/models` and return the full list for the Settings form.
+#[tauri::command]
+async fn fetch_remote_models(
+    core: State<'_, CoreState>,
+    args: ProbeEndpointArgs,
+) -> Result<FetchModelsResult, String> {
+    let base = normalize_openai_base(&args.base_url)?;
+    let models_url = models_url_from_base(&base);
+    let key = resolve_probe_api_key(
+        &core,
+        args.api_key.as_deref(),
+        args.env_key.as_deref(),
+        args.use_saved_key.unwrap_or(true),
+        Some(&base),
+    )
+    .await;
+    if key.is_none() {
+        return Ok(FetchModelsResult {
+            ok: false,
+            status: 0,
+            message: "No API key (type one, or save a key first / set env key)".into(),
+            models_url,
+            models: vec![],
+        });
+    }
+    let (status, body, _ms) = http_get_models(&models_url, key.as_deref()).await?;
+    let models = parse_models_list(&body);
+    let ok = (200..300).contains(&status) && !models.is_empty();
+    let message = if (200..300).contains(&status) {
+        if models.is_empty() {
+            "HTTP OK but no models in response".into()
+        } else {
+            format!("Fetched {} model(s)", models.len())
+        }
+    } else {
+        let snippet: String = body.chars().take(180).collect();
+        format!("HTTP {status} · {snippet}")
+    };
+    Ok(FetchModelsResult {
+        ok,
+        status,
+        message,
+        models_url,
+        models,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueryBalanceArgs {
+    /// Vendor kind: `deepseek` | `bailian`
+    vendor: String,
+    base_url: String,
+    api_key: Option<String>,
+    env_key: Option<String>,
+    use_saved_key: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BalanceInfoItem {
+    currency: String,
+    total_balance: String,
+    granted_balance: String,
+    topped_up_balance: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BalanceOpenLink {
+    label: String,
+    url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VendorBalanceResult {
+    ok: bool,
+    provider: String,
+    /// `api` = queried via HTTP; `console` = open Aliyun console (no API-Key balance API).
+    mode: String,
+    message: String,
+    is_available: Option<bool>,
+    balance_infos: Vec<BalanceInfoItem>,
+    open_urls: Vec<BalanceOpenLink>,
+    latency_ms: u64,
+    status: u16,
+}
+
+/// Strip a trailing `/v1` so host-root endpoints (e.g. DeepSeek `/user/balance`) resolve.
+fn api_host_root_from_openai_base(base: &str) -> String {
+    let mut s = base.trim().to_string();
+    while s.ends_with('/') {
+        s.pop();
+    }
+    let lower = s.to_ascii_lowercase();
+    if lower.ends_with("/v1") {
+        s.truncate(s.len().saturating_sub(3));
+        while s.ends_with('/') {
+            s.pop();
+        }
+    }
+    s
+}
+
+/// Query vendor account balance / quota.
+///
+/// - DeepSeek: GET `/user/balance` with Bearer API key
+///   (https://api-docs.deepseek.com/zh-cn/api/get-user-balance)
+/// - Bailian: DashScope API Key cannot call BSS `QueryAccountBalance` or free-quota APIs;
+///   returns console links for account available amount + model free quota.
+#[tauri::command]
+async fn query_vendor_balance(
+    core: State<'_, CoreState>,
+    args: QueryBalanceArgs,
+) -> Result<VendorBalanceResult, String> {
+    let vendor = args.vendor.trim().to_ascii_lowercase();
+    match vendor.as_str() {
+        "deepseek" => {
+            let base = normalize_openai_base(&args.base_url)?;
+            let root = api_host_root_from_openai_base(&base);
+            let balance_url = format!("{root}/user/balance");
+            let key = resolve_probe_api_key(
+                &core,
+                args.api_key.as_deref(),
+                args.env_key.as_deref(),
+                args.use_saved_key.unwrap_or(true),
+                Some(&base),
+            )
+            .await;
+            let Some(api_key) = key else {
+                return Ok(VendorBalanceResult {
+                    ok: false,
+                    provider: "deepseek".into(),
+                    mode: "api".into(),
+                    message: "No API key (type one, or save a key first)".into(),
+                    is_available: None,
+                    balance_infos: vec![],
+                    open_urls: vec![],
+                    latency_ms: 0,
+                    status: 0,
+                });
+            };
+
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(12))
+                .build()
+                .map_err(|e| format!("http client: {e}"))?;
+            let started = std::time::Instant::now();
+            let resp = client
+                .get(&balance_url)
+                .header("Authorization", format!("Bearer {api_key}"))
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .map_err(|e| format!("request failed: {e}"))?;
+            let status = resp.status().as_u16();
+            let body = resp
+                .text()
+                .await
+                .map_err(|e| format!("read body: {e}"))?;
+            let latency_ms = started.elapsed().as_millis() as u64;
+
+            if !(200..300).contains(&status) {
+                let snippet: String = body.chars().take(220).collect();
+                return Ok(VendorBalanceResult {
+                    ok: false,
+                    provider: "deepseek".into(),
+                    mode: "api".into(),
+                    message: format!("HTTP {status} · {snippet}"),
+                    is_available: None,
+                    balance_infos: vec![],
+                    open_urls: vec![],
+                    latency_ms,
+                    status,
+                });
+            }
+
+            let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+                format!("invalid balance JSON: {e}")
+            })?;
+            let is_available = v.get("is_available").and_then(|x| x.as_bool());
+            let mut balance_infos = Vec::new();
+            if let Some(arr) = v.get("balance_infos").and_then(|x| x.as_array()) {
+                for item in arr {
+                    let currency = item
+                        .get("currency")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let total_balance = item
+                        .get("total_balance")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("0")
+                        .to_string();
+                    let granted_balance = item
+                        .get("granted_balance")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("0")
+                        .to_string();
+                    let topped_up_balance = item
+                        .get("topped_up_balance")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("0")
+                        .to_string();
+                    balance_infos.push(BalanceInfoItem {
+                        currency,
+                        total_balance,
+                        granted_balance,
+                        topped_up_balance,
+                    });
+                }
+            }
+
+            let avail_txt = match is_available {
+                Some(true) => "available",
+                Some(false) => "unavailable",
+                None => "unknown",
+            };
+            let details = if balance_infos.is_empty() {
+                "(no balance_infos)".to_string()
+            } else {
+                balance_infos
+                    .iter()
+                    .map(|b| {
+                        format!(
+                            "{} total={} (granted={}, topped_up={})",
+                            b.currency, b.total_balance, b.granted_balance, b.topped_up_balance
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
+            Ok(VendorBalanceResult {
+                ok: true,
+                provider: "deepseek".into(),
+                mode: "api".into(),
+                message: format!("DeepSeek · {avail_txt} · {details} · {latency_ms} ms"),
+                is_available,
+                balance_infos,
+                open_urls: vec![],
+                latency_ms,
+                status,
+            })
+        }
+        "bailian" => {
+            // Official free-quota / usage docs: console only for DashScope API Key users.
+            // Account cash balance requires BSS OpenAPI (AccessKey), not inference API Key.
+            Ok(VendorBalanceResult {
+                ok: true,
+                provider: "bailian".into(),
+                mode: "console".into(),
+                message: "Bailian account balance and free model quota are shown in the Aliyun console (DashScope API Key cannot query BSS/free-quota APIs).".into(),
+                is_available: None,
+                balance_infos: vec![],
+                open_urls: vec![
+                    BalanceOpenLink {
+                        label: "account_balance".into(),
+                        // Aliyun User Center — available credit / cash balance
+                        url: "https://usercenter2.aliyun.com/home".into(),
+                    },
+                ],
+                latency_ms: 0,
+                status: 200,
+            })
+        }
+        other => Ok(VendorBalanceResult {
+            ok: false,
+            provider: other.to_string(),
+            mode: "unsupported".into(),
+            message: format!("Balance query not supported for vendor '{other}'"),
+            is_available: None,
+            balance_infos: vec![],
+            open_urls: vec![],
+            latency_ms: 0,
+            status: 0,
+        }),
+    }
+}
+
+/// Guess mime when mime_guess is weak (Office Open XML, etc.).
+fn mime_from_path_or_name(path: &std::path::Path, name: &str) -> Option<String> {
+    if let Some(m) = mime_guess::from_path(path).first() {
+        let s = m.essence_str().to_string();
+        if s != "application/octet-stream" {
+            return Some(s);
+        }
+    }
+    mime_from_filename(name)
+}
+
+fn mime_from_filename(name: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    let ext = lower.rsplit('.').next().unwrap_or("");
+    let mime = match ext {
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc" => "application/msword",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xls" => "application/vnd.ms-excel",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        "json" => "application/json",
+        "csv" => "text/csv",
+        _ => return None,
+    };
+    Some(mime.to_string())
+}
+
+/// Sanitize a display filename for use on disk while keeping readable names
+/// (including Chinese). Only strips path separators and control chars.
+fn safe_filename_for_disk(name: &str, fallback_ext: &str) -> String {
+    let trimmed = name.trim();
+    let base = if trimmed.is_empty() {
+        format!("file.{fallback_ext}")
+    } else {
+        trimmed.to_string()
+    };
+    let mut out: String = base
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | '\0' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    // Avoid empty / dot-only names.
+    if out.trim_matches('.').is_empty() {
+        out = format!("file.{fallback_ext}");
+    }
+    // Ensure extension if missing and we know one.
+    if !fallback_ext.is_empty()
+        && !out
+            .to_ascii_lowercase()
+            .ends_with(&format!(".{}", fallback_ext.to_ascii_lowercase()))
+        && !out.contains('.')
+    {
+        out = format!("{out}.{fallback_ext}");
+    }
+    out
+}
+
+#[tauri::command]
+async fn pick_attachments(app: AppHandle) -> Result<Vec<AttachmentInput>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let files = app
+        .dialog()
+        .file()
+        .set_title("Attach files")
+        .add_filter(
+            "Documents",
+            &[
+                "docx", "doc", "xlsx", "xls", "pptx", "ppt", "pdf", "txt", "md", "csv",
+            ],
+        )
+        .add_filter(
+            "Images",
+            &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"],
+        )
+        .add_filter(
+            "Code",
+            &[
+                "json", "rs", "ts", "tsx", "js", "py", "go", "toml", "yaml", "yml", "html",
+                "css",
+            ],
+        )
+        .add_filter("All", &["*"])
+        .blocking_pick_files();
+    let Some(files) = files else {
+        return Ok(vec![]);
+    };
+    let mut out = Vec::new();
+    for f in files {
+        let path = f
+            .into_path()
+            .map_err(|e| format!("invalid path: {e}"))?;
+        // Always keep the on-disk original basename for display (Word, etc.).
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let size = std::fs::metadata(&path).ok().map(|m| m.len());
+        let mime = mime_from_path_or_name(&path, &name);
+        out.push(AttachmentInput {
+            path: path.display().to_string(),
+            name: Some(name),
+            mime,
+            size,
+            is_dir: Some(false),
+        });
+    }
+    Ok(out)
+}
+
+/// Classify OS drag-drop paths (files and folders) for the composer.
+#[tauri::command]
+async fn resolve_drop_paths(paths: Vec<String>) -> Result<Vec<AttachmentInput>, String> {
+    let mut out = Vec::new();
+    for raw in paths {
+        let path = std::path::PathBuf::from(raw.trim());
+        if path.as_os_str().is_empty() {
+            continue;
+        }
+        let meta = std::fs::metadata(&path).map_err(|e| {
+            format!("cannot access {}: {e}", path.display())
+        })?;
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        if meta.is_dir() {
+            out.push(AttachmentInput {
+                path: path.display().to_string(),
+                name: Some(name),
+                mime: Some("inode/directory".into()),
+                size: None,
+                is_dir: Some(true),
+            });
+        } else if meta.is_file() {
+            let mime = mime_from_path_or_name(&path, &name);
+            out.push(AttachmentInput {
+                path: path.display().to_string(),
+                name: Some(name),
+                mime,
+                size: Some(meta.len()),
+                is_dir: Some(false),
+            });
+        }
+        // Skip sockets/devices/symlinks-to-nowhere etc.
+    }
+    Ok(out)
+}
+
+fn mime_to_ext(mime: &str) -> &'static str {
+    match mime {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        "image/svg+xml" => "svg",
+        "application/pdf" => "pdf",
+        "text/plain" => "txt",
+        "text/markdown" => "md",
+        "application/json" => "json",
+        "application/msword" => "doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
+        "application/vnd.ms-excel" => "xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
+        "application/vnd.ms-powerpoint" => "ppt",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => {
+            "pptx"
+        }
+        _ if mime.starts_with("image/") => "png",
+        _ => "bin",
+    }
+}
+
+/// Save a clipboard-pasted image/file into a temp path for the agent to read.
+/// `name` on the result is the **original display name** (e.g. `报告.docx`), not the temp path.
+#[tauri::command]
+async fn save_pasted_attachment(
+    payload: PastedAttachmentInput,
+) -> Result<AttachmentInput, String> {
+    let mut mime = payload
+        .mime
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+
+    // Accept data URL prefix if the frontend forgot to strip it.
+    let b64 = payload
+        .data_base64
+        .trim()
+        .rsplit(',')
+        .next()
+        .unwrap_or("")
+        .trim();
+    if b64.is_empty() {
+        return Err("empty paste payload".into());
+    }
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(b64))
+        .map_err(|e| format!("invalid base64: {e}"))?;
+
+    if bytes.is_empty() {
+        return Err("empty paste bytes".into());
+    }
+    // 25 MiB guard
+    if bytes.len() > 25 * 1024 * 1024 {
+        return Err("pasted file too large (max 25MB)".into());
+    }
+
+    // Prefer original filename; refine mime from it when browser only sent octet-stream.
+    let display_name_raw = payload
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    if mime == "application/octet-stream" || mime.is_empty() {
+        if let Some(ref n) = display_name_raw {
+            if let Some(m) = mime_from_filename(n) {
+                mime = m;
+            }
+        }
+    }
+
+    let ext = mime_to_ext(&mime);
+    let display_name = display_name_raw.unwrap_or_else(|| {
+        let stamp = chrono_like_stamp();
+        format!("paste-{stamp}.{ext}")
+    });
+    // Keep original basename for the user-visible name (Word keeps 报告.docx).
+    let display_name = {
+        let leaf = display_name
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(&display_name)
+            .trim();
+        if leaf.is_empty() {
+            format!("file.{ext}")
+        } else {
+            leaf.to_string()
+        }
+    };
+
+    let dir = std::env::temp_dir().join("grokx-pastes");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create paste dir: {e}"))?;
+    // Unique on-disk path; display name stays original.
+    let disk_name = safe_filename_for_disk(&display_name, ext);
+    let path = dir.join(format!(
+        "{}-{}",
+        &Uuid::new_v4().to_string()[..8],
+        disk_name
+    ));
+    std::fs::write(&path, &bytes).map_err(|e| format!("write paste file: {e}"))?;
+
+    Ok(AttachmentInput {
+        path: path.display().to_string(),
+        name: Some(display_name),
+        mime: Some(mime),
+        size: Some(bytes.len() as u64),
+        is_dir: Some(false),
+    })
+}
+
+fn chrono_like_stamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    secs.to_string()
+}
+
+/// Read an image from the OS clipboard (macOS screenshot / Cmd+C image).
+/// Returns None when the clipboard has no image.
+#[tauri::command]
+async fn read_clipboard_image() -> Result<Option<AttachmentInput>, String> {
+    tokio::task::spawn_blocking(|| {
+        let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("clipboard: {e}"))?;
+        let img = match clipboard.get_image() {
+            Ok(i) => i,
+            Err(_) => return Ok(None),
+        };
+        if img.width == 0 || img.height == 0 {
+            return Ok(None);
+        }
+        let rgba = image::RgbaImage::from_raw(
+            img.width as u32,
+            img.height as u32,
+            img.bytes.into_owned(),
+        )
+        .ok_or_else(|| "invalid clipboard image buffer".to_string())?;
+        let mut png_bytes: Vec<u8> = Vec::new();
+        {
+            let dyn_img = image::DynamicImage::ImageRgba8(rgba);
+            dyn_img
+                .write_to(
+                    &mut std::io::Cursor::new(&mut png_bytes),
+                    image::ImageFormat::Png,
+                )
+                .map_err(|e| format!("encode png: {e}"))?;
+        }
+        if png_bytes.is_empty() {
+            return Ok(None);
+        }
+        let dir = std::env::temp_dir().join("grokx-pastes");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create paste dir: {e}"))?;
+        let path = dir.join(format!(
+            "{}-clipboard-{}.png",
+            &Uuid::new_v4().to_string()[..8],
+            chrono_like_stamp()
+        ));
+        std::fs::write(&path, &png_bytes).map_err(|e| format!("write clipboard image: {e}"))?;
+        Ok(Some(AttachmentInput {
+            path: path.display().to_string(),
+            name: Some(
+                path.file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "clipboard.png".into()),
+            ),
+            mime: Some("image/png".into()),
+            size: Some(png_bytes.len() as u64),
+            is_dir: Some(false),
+        }))
+    })
+    .await
+    .map_err(|e| format!("clipboard task: {e}"))?
+}
+
+#[tauri::command]
+async fn cancel_turn(app: AppHandle, core: State<'_, CoreState>) -> Result<(), String> {
+    // Soft-cancel then force-restart agent so wedged turns cannot block prompts.
+    core.0
+        .cancel_turn(resource_dir(&app), true)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn resolve_permission(
+    core: State<'_, CoreState>,
+    request_id: String,
+    decision: String,
+) -> Result<(), String> {
+    let decision = match decision.as_str() {
+        "allow_once" | "allow" | "AllowOnce" => PermissionDecision::AllowOnce,
+        "allow_session" | "AllowSession" => PermissionDecision::AllowSession,
+        "deny" | "Deny" => PermissionDecision::Deny,
+        other => return Err(format!("unknown decision: {other}")),
+    };
+    core.0
+        .resolve_permission(request_id, decision)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn permission_is_pending(
+    core: State<'_, CoreState>,
+    request_id: String,
+) -> Result<bool, String> {
+    Ok(core.0.permission_is_pending(&request_id).await)
+}
+
+#[tauri::command]
+async fn session_info(core: State<'_, CoreState>) -> Result<SessionInfo, String> {
+    let session_id = core
+        .0
+        .current_session_id()
+        .await
+        .map(|s| s.0.to_string())
+        .unwrap_or_default();
+    let project_root = core
+        .0
+        .current_project_root()
+        .await
+        .map(|p| p.display().to_string());
+    let work_path = core
+        .0
+        .current_work_path()
+        .await
+        .map(|p| p.display().to_string());
+    Ok(SessionInfo {
+        session_id,
+        project_root,
+        work_path,
+        status: core.0.connection_status().await.to_string(),
+    })
+}
+
+/// Whether a task still has a live agent process (can receive prompts without respawn).
+#[tauri::command]
+async fn is_session_live(
+    core: State<'_, CoreState>,
+    session_id: String,
+) -> Result<bool, String> {
+    let sid = parse_session_id(&session_id)?;
+    Ok(core.0.is_session_live(&sid).await)
+}
+
+/// Whether a task currently has a turn in progress (sidebar Working indicator).
+#[tauri::command]
+async fn is_session_busy(
+    core: State<'_, CoreState>,
+    session_id: String,
+) -> Result<bool, String> {
+    let sid = parse_session_id(&session_id)?;
+    Ok(core.0.is_session_busy(&sid).await)
+}
+
+/// All session ids with a live agent (parallel multi-task).
+#[tauri::command]
+async fn list_live_sessions(core: State<'_, CoreState>) -> Result<Vec<String>, String> {
+    Ok(core
+        .0
+        .live_session_ids()
+        .await
+        .into_iter()
+        .map(|s| s.0.to_string())
+        .collect())
+}
+
+/// Processes the agent has spawned for a task (tool shells / servers).
+#[tauri::command]
+async fn list_session_processes(
+    core: State<'_, CoreState>,
+    session_id: String,
+) -> Result<Vec<app_core::SessionProcessInfo>, String> {
+    let sid = parse_session_id(&session_id)?;
+    core.0
+        .list_session_processes(&sid)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn stop_session_process(
+    core: State<'_, CoreState>,
+    session_id: String,
+    pid: u32,
+) -> Result<(), String> {
+    let sid = parse_session_id(&session_id)?;
+    core.0
+        .stop_session_process(&sid, pid)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn pause_session_process(
+    core: State<'_, CoreState>,
+    session_id: String,
+    pid: u32,
+) -> Result<(), String> {
+    let sid = parse_session_id(&session_id)?;
+    core.0
+        .pause_session_process(&sid, pid)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn resume_session_process(
+    core: State<'_, CoreState>,
+    session_id: String,
+    pid: u32,
+) -> Result<(), String> {
+    let sid = parse_session_id(&session_id)?;
+    core.0
+        .resume_session_process(&sid, pid)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn restart_session_process(
+    core: State<'_, CoreState>,
+    session_id: String,
+    pid: u32,
+) -> Result<app_core::RestartedProcessInfo, String> {
+    let sid = parse_session_id(&session_id)?;
+    core.0
+        .restart_session_process(&sid, pid)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Serialize)]
+struct DirEntryInfo {
+    name: String,
+    path: String,
+    is_dir: bool,
+    size: Option<u64>,
+    /// ISO-ish modified time when available.
+    modified: Option<String>,
+}
+
+/// List one directory level for the Files tab (task workspace / project root).
+/// Skips hidden names (leading `.`) and caps entry count for UI.
+#[tauri::command]
+fn list_directory(
+    path: String,
+    max_entries: Option<usize>,
+) -> Result<Vec<DirEntryInfo>, String> {
+    let root = PathBuf::from(path.trim());
+    if root.as_os_str().is_empty() {
+        return Err("empty path".into());
+    }
+    if !root.is_dir() {
+        return Err(format!("not a directory: {}", root.display()));
+    }
+    let limit = max_entries.unwrap_or(200).clamp(1, 500);
+    let mut entries = Vec::new();
+    let read = std::fs::read_dir(&root).map_err(|e| format!("read_dir {}: {e}", root.display()))?;
+    for ent in read {
+        let ent = match ent {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let name = ent.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        // Skip heavy / uninteresting dirs in task workspaces.
+        if name == "node_modules" || name == "target" || name == ".git" {
+            continue;
+        }
+        let path = ent.path();
+        let meta = ent.metadata().ok();
+        let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(path.is_dir());
+        let size = meta.as_ref().and_then(|m| {
+            if m.is_file() {
+                Some(m.len())
+            } else {
+                None
+            }
+        });
+        let modified = meta.and_then(|m| m.modified().ok()).map(|t| {
+            match t.duration_since(std::time::UNIX_EPOCH) {
+                Ok(d) => format!("{}", d.as_secs()),
+                Err(_) => String::new(),
+            }
+        });
+        entries.push(DirEntryInfo {
+            name,
+            path: path.display().to_string(),
+            is_dir,
+            size,
+            modified: modified.filter(|s| !s.is_empty()),
+        });
+        if entries.len() >= limit {
+            break;
+        }
+    }
+    // Dirs first, then files; alphabetical within group.
+    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    });
+    Ok(entries)
+}
+
+#[derive(Debug, Serialize)]
+struct GitCommitRow {
+    hash: String,
+    short: String,
+    subject: String,
+    author: String,
+    relative: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GitStatusInfo {
+    /// Absolute path that was queried (repo root or project/task path).
+    path: String,
+    /// True when `path` is inside a git work tree.
+    is_repo: bool,
+    branch: Option<String>,
+    /// Short HEAD sha (7 chars) when available.
+    head_short: Option<String>,
+    /// Full HEAD sha when available.
+    head: Option<String>,
+    /// Upstream tracking ref if configured.
+    upstream: Option<String>,
+    /// Working tree dirty (any unstaged/untracked/staged changes).
+    dirty: bool,
+    /// Counts from `git status --porcelain`.
+    staged: u32,
+    unstaged: u32,
+    untracked: u32,
+    /// First few porcelain lines for UI (path status).
+    changes: Vec<String>,
+    /// Recent commits on the current branch.
+    recent: Vec<GitCommitRow>,
+    /// Human-readable error if git failed (not a hard command error).
+    note: Option<String>,
+}
+
+fn run_git(cwd: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if err.is_empty() {
+            format!("git {:?} failed", args)
+        } else {
+            err
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Git summary for the Outputs panel (branch, dirty files, recent commits).
+#[tauri::command]
+fn git_status(path: String) -> Result<GitStatusInfo, String> {
+    let root = PathBuf::from(path.trim());
+    if root.as_os_str().is_empty() {
+        return Err("empty path".into());
+    }
+    // Prefer directory; if a file was passed, use parent.
+    let cwd = if root.is_file() {
+        root.parent().map(|p| p.to_path_buf()).unwrap_or(root.clone())
+    } else {
+        root.clone()
+    };
+    if !cwd.exists() {
+        return Err(format!("path does not exist: {}", cwd.display()));
+    }
+
+    let is_repo = run_git(&cwd, &["rev-parse", "--is-inside-work-tree"])
+        .map(|s| s == "true")
+        .unwrap_or(false);
+
+    if !is_repo {
+        return Ok(GitStatusInfo {
+            path: cwd.display().to_string(),
+            is_repo: false,
+            branch: None,
+            head_short: None,
+            head: None,
+            upstream: None,
+            dirty: false,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            changes: vec![],
+            recent: vec![],
+            note: Some("Not a git repository".into()),
+        });
+    }
+
+    let branch = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"]).ok();
+    let head = run_git(&cwd, &["rev-parse", "HEAD"]).ok();
+    let head_short = head
+        .as_ref()
+        .map(|h| h.chars().take(7).collect::<String>());
+    let upstream = run_git(
+        &cwd,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+    )
+    .ok();
+
+    let porcelain = run_git(&cwd, &["status", "--porcelain", "-uall"]).unwrap_or_default();
+    let mut staged = 0u32;
+    let mut unstaged = 0u32;
+    let mut untracked = 0u32;
+    let mut changes = Vec::new();
+    for line in porcelain.lines() {
+        if line.len() < 2 {
+            continue;
+        }
+        let x = line.as_bytes()[0] as char;
+        let y = line.as_bytes()[1] as char;
+        if x == '?' && y == '?' {
+            untracked += 1;
+        } else {
+            if x != ' ' && x != '?' {
+                staged += 1;
+            }
+            if y != ' ' && y != '?' {
+                unstaged += 1;
+            }
+        }
+        if changes.len() < 12 {
+            changes.push(line.to_string());
+        }
+    }
+    let dirty = staged + unstaged + untracked > 0;
+
+    let log = run_git(
+        &cwd,
+        &[
+            "log",
+            "-8",
+            "--pretty=format:%H%x09%h%x09%s%x09%an%x09%ar",
+        ],
+    )
+    .unwrap_or_default();
+    let mut recent = Vec::new();
+    for line in log.lines() {
+        let parts: Vec<&str> = line.splitn(5, '\t').collect();
+        if parts.len() < 5 {
+            continue;
+        }
+        recent.push(GitCommitRow {
+            hash: parts[0].to_string(),
+            short: parts[1].to_string(),
+            subject: parts[2].to_string(),
+            author: parts[3].to_string(),
+            relative: parts[4].to_string(),
+        });
+    }
+
+    Ok(GitStatusInfo {
+        path: cwd.display().to_string(),
+        is_repo: true,
+        branch,
+        head_short,
+        head,
+        upstream,
+        dirty,
+        staged,
+        unstaged,
+        untracked,
+        changes,
+        recent,
+        note: None,
+    })
+}
+
+/// Open a file or folder with the OS default app (Finder / Explorer / …).
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let mut p = path.trim().to_string();
+    if p.is_empty() {
+        return Err("empty path".into());
+    }
+    for prefix in [r"\\?\", r"//?/", r"\?\", r"/?/"] {
+        if let Some(rest) = p.strip_prefix(prefix) {
+            p = rest.to_string();
+            break;
+        }
+    }
+    // Restore markdown-eaten `\.grokx` → `/.grokx` (e.g. ZCY.grokx → ZCY/.grokx).
+    {
+        let chars: Vec<char> = p.chars().collect();
+        let mut out = String::with_capacity(p.len() + 8);
+        let mut i = 0;
+        while i < chars.len() {
+            if i + 6 <= chars.len() {
+                let window: String = chars[i..i + 6].iter().collect();
+                if window.eq_ignore_ascii_case(".grokx")
+                    && i > 0
+                    && chars[i - 1].is_ascii_alphanumeric()
+                {
+                    out.push('/');
+                    out.push_str(".grokx");
+                    i += 6;
+                    continue;
+                }
+            }
+            out.push(chars[i]);
+            i += 1;
+        }
+        p = out;
+    }
+    #[cfg(windows)]
+    {
+        p = p.replace('/', "\\");
+    }
+
+    let pb = PathBuf::from(&p);
+    if !pb.exists() {
+        return Err(format!("path does not exist: {p}"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&p)
+            .spawn()
+            .map_err(|e| format!("open: {e}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &p])
+            .spawn()
+            .map_err(|e| format!("open: {e}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&p)
+            .spawn()
+            .map_err(|e| format!("xdg-open: {e}"))?;
+    }
+    Ok(())
+}
+
+fn spawn_event_forwarder(app: AppHandle, core: Arc<AppCore>) {
+    tauri::async_runtime::spawn(async move {
+        let Some(mut rx) = core.take_event_receiver().await else {
+            return;
+        };
+        while let Some(event) = rx.recv().await {
+            if let Err(err) = app.emit("agent-event", &event) {
+                tracing::warn!("emit agent-event failed: {err}");
+            }
+            let model = core.current_model().await;
+            telemetry::on_event(&event, model.as_deref());
+        }
+    });
+}
+
+/// Headless smoke used by verification: same logic as Tauri commands, no window.
+///
+/// Env: `GROKX_HEADLESS_CHECK=1` → print JSON for app_version + resolve_engine and exit.
+pub async fn headless_check() -> Result<(), String> {
+    let version = app_version();
+    let core = AppCore::bootstrap().map_err(|e| e.to_string())?;
+    let resource = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+    let allow_path = true;
+    let engine = core
+        .resolve_runtime(Some(resource.as_path()), allow_path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let source = match engine.source {
+        EngineSource::Bundled => "bundled",
+        EngineSource::Custom => "custom",
+        EngineSource::Path => "path",
+    };
+    let payload = serde_json::json!({
+        "app_version": version,
+        "resolve_engine": {
+            "path": engine.path.display().to_string(),
+            "source": source,
+            "status": core.connection_status().await.to_string(),
+        }
+    });
+    println!("{payload}");
+    Ok(())
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    if std::env::var("GROKX_HEADLESS_CHECK").ok().as_deref() == Some("1") {
+        if let Err(err) = tauri::async_runtime::block_on(headless_check()) {
+            eprintln!("headless_check failed: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    let core = AppCore::bootstrap().expect("failed to bootstrap app core");
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .manage(CoreState(core.clone()))
+        .manage(VendorKeyAgentState::default())
+        .manage(Arc::new(dependencies::DependencyManager::default()))
+        .setup(move |app| {
+            telemetry::init(&app_version());
+            spawn_event_forwarder(app.handle().clone(), core.clone());
+            let resource = resource_dir(app.handle());
+            // Mount bundled Bailian media MCP + built-in npx MCPs on every launch.
+            if let Err(err) =
+                app_config::ensure_default_media_mcp_in_grok_toml(resource.as_deref())
+            {
+                tracing::warn!(
+                    error = %err,
+                    "failed to ensure default media MCP on startup"
+                );
+            } else if app_config::resolve_media_mcp_binary(resource.as_deref()).is_none() {
+                tracing::warn!(
+                    "media-mcp binary not found — image/video MCP not mounted \
+                     (build with tools/build-media-mcp.ps1 + packaging/bundle_runtime.ps1)"
+                );
+            } else {
+                tracing::info!("default Bailian media MCP ensured in ~/.grok/config.toml");
+            }
+            let cn = app_config::AppPaths::discover()
+                .ok()
+                .and_then(|p| app_config::UserSettings::load(&p.config_file).ok())
+                .map(|s| s.cn_acceleration)
+                .unwrap_or_default();
+            if let Err(err) = app_config::ensure_default_builtin_mcps_in_grok_toml(Some(&cn)) {
+                tracing::warn!(error = %err, "failed to ensure built-in MCP servers");
+            } else {
+                tracing::info!("built-in filesystem/memory/fetch MCP ensured");
+            }
+            // Auto-fetch missing Bonsai / runtime / grok deps (Settings → Dependencies).
+            dependencies::spawn_auto_download(app.handle().clone());
+            // grok.exe (ACP agent) and local llama are independent:
+            // - Always warm-start grok immediately.
+            // - Only start llama when the active model targets the local server.
+            let core_agent = core.clone();
+            tauri::async_runtime::spawn(async move {
+                match core_agent.warm_start_agent(resource, true).await {
+                    Ok(sid) => tracing::info!(
+                        session_id = %sid.0,
+                        "grok agent warm-start finished"
+                    ),
+                    Err(err) => tracing::warn!(
+                        error = %err,
+                        "grok agent warm-start failed (will retry on task open)"
+                    ),
+                }
+            });
+            let core_llm = core.clone();
+            tauri::async_runtime::spawn(async move {
+                if !core_llm.wants_local_llm().await {
+                    core_llm.stop_local_llm().await;
+                    tracing::info!("active model is remote — skipped local LLM bootstrap");
+                    return;
+                }
+                if !llm_runtime::host_supports_local_bonsai() {
+                    tracing::info!(
+                        hw = %llm_runtime::tune_bonsai_for_host().label,
+                        "local Bonsai skipped — NVIDIA GPU with ≥8GB VRAM required"
+                    );
+                    return;
+                }
+                // Remote download and llama-server start are independent.
+                // Wait until GGUF + llama binaries + CUDA DLLs are complete.
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(45 * 60);
+                loop {
+                    if dependencies::local_llm_files_on_disk() {
+                        break;
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        tracing::warn!("timed out waiting for local LLM files before bootstrap");
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+                if !dependencies::local_llm_files_on_disk() {
+                    tracing::warn!("local LLM files not ready — skip llama-server start");
+                    return;
+                }
+                let roots = local_llm_search_roots();
+                match core_llm.ensure_local_llm(&roots).await {
+                    Ok(status) => tracing::info!(?status, "local LLM bootstrap finished"),
+                    Err(err) => tracing::warn!(error = %err, "local LLM bootstrap skipped/failed"),
+                }
+            });
+            // Apply brand window/taskbar icon (icons are also embedded at build time).
+            if let Some(win) = app.get_webview_window("main") {
+                match image::load_from_memory(include_bytes!("../icons/icon.png")) {
+                    Ok(img) => {
+                        let rgba = img.to_rgba8();
+                        let (w, h) = rgba.dimensions();
+                        let icon = tauri::image::Image::new_owned(rgba.into_raw(), w, h);
+                        if let Err(err) = win.set_icon(icon) {
+                            tracing::warn!(error = %err, "failed to set window icon");
+                        }
+                    }
+                    Err(err) => tracing::warn!(error = %err, "failed to decode window icon"),
+                }
+            }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            app_version,
+            resolve_engine,
+            set_project_root,
+            ensure_default_project,
+            pick_project_dir,
+            list_sessions,
+            list_projects,
+            list_sessions_for_project,
+            rename_session,
+            delete_session,
+            delete_project,
+            save_chat_history,
+            load_chat_history,
+            connect_workspace,
+            reconnect_session,
+            send_prompt,
+            send_prompt_rich,
+            send_btw,
+            list_models,
+            current_model,
+            set_model,
+            list_efforts,
+            get_settings,
+            save_settings,
+            ensure_local_llm,
+            local_llm_status,
+            local_llm_hardware_tune,
+            stop_local_llm,
+            test_endpoint,
+            fetch_remote_models,
+            query_vendor_balance,
+            read_grok_config,
+            write_grok_config,
+            pick_attachments,
+            resolve_drop_paths,
+            save_pasted_attachment,
+            read_clipboard_image,
+            cancel_turn,
+            resolve_permission,
+            permission_is_pending,
+            session_info,
+            is_session_live,
+            is_session_busy,
+            list_live_sessions,
+            list_session_processes,
+            stop_session_process,
+            pause_session_process,
+            resume_session_process,
+            restart_session_process,
+            list_directory,
+            open_path,
+            git_status,
+            vendor_key_agent::list_getkey_platforms,
+            vendor_key_agent::start_get_key,
+            vendor_key_agent::continue_get_key,
+            vendor_key_agent::cancel_get_key,
+            vendor_key_agent::mask_getkey,
+            vendor_key_agent::poll_extracted_key,
+            vendor_key_agent::read_clipboard_text,
+            extensions::get_extensions_catalog,
+            extensions::install_skill,
+            extensions::uninstall_skill,
+            extensions::install_extension,
+            extensions::uninstall_extension,
+            dependencies::get_dependencies_catalog,
+            dependencies::set_dependency_download_url,
+            dependencies::start_dependency_download,
+            dependencies::pause_dependency_download,
+            dependencies::redownload_dependency,
+            dependencies::delete_dependency,
+            dependencies::probe_dependency_url,
+            dependencies::download_all_missing_dependencies,
+            dependencies::get_dependency_readiness,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running grokx desktop");
+}

@@ -1,0 +1,89 @@
+id: bailian
+name: 阿里云百炼
+home_url: https://bailian.console.aliyun.com
+api_keys_url: https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key
+test_endpoint: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+test_auth_header: Authorization
+test_auth_prefix: "Bearer "
+
+steps:
+  - type: navigate
+    url: https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key
+    wait_ms: 1500
+    message: 打开百炼 API Key 页…
+
+  - type: wait_login
+    message: 请在浏览器中完成阿里云登录；登录后将自动回到 API Key 页并开始获取（最长 10 分钟）
+    timeout_ms: 600000
+    poll_ms: 1500
+    stable_polls: 2
+    require_enabled: true
+    revisit_url: https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key
+    revisit_every_ms: 10000
+    url_includes:
+      - bailian.console.aliyun.com
+    url_path_includes:
+      - api-key
+    url_excludes:
+      - login.aliyun.com
+      - passport.aliyun.com
+      - account.aliyun.com
+      - signin.
+      - aliyunid
+    deny_texts:
+      - "密码登录"
+      - "扫码登录"
+      - "短信登录"
+      - "验证码登录"
+      - "登录阿里云账号"
+      - "请输入密码"
+      - "忘记密码"
+    texts:
+      - "+ 创建 API Key"
+      - "创建 API Key"
+      - "创建API Key"
+      - "创建API-Key"
+    ready_markers:
+      - "创建 API Key"
+      - "API-KEY"
+      - "API Key"
+
+  - type: navigate
+    url: https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key
+    wait_ms: 1500
+    message: 进入 API Key 管理页…
+
+  - type: auto_click
+    texts:
+      - "+ 创建 API Key"
+      - "创建 API Key"
+      - "创建API Key"
+      - "创建API-Key"
+    timeout_ms: 30000
+    message: 点击创建 API Key…
+
+  - type: sleep
+    ms: 800
+
+  - type: auto_fill
+    selector: 'textarea:visible, .ant-modal textarea, textarea[placeholder*="描述"]'
+    value: FreeCoder自动创建-{{timestamp}}
+    optional: true
+    timeout_ms: 8000
+    message: 填写描述…
+
+  - type: modal_confirm
+    timeout_ms: 20000
+    message: 点击确定…
+
+  - type: sleep
+    ms: 800
+
+  - type: extract
+    patterns:
+      - 'sk-ws-[A-Za-z0-9._-]{8,}'
+      - 'sk-sp-[A-Za-z0-9._-]{8,}'
+      - 'sk-[A-Za-z0-9]{16,}'
+      - 'sk-[A-Za-z0-9._-]{16,}'
+    timeout_ms: 300000
+    message: 正在读取并回传 API Key；若页面要求短信或扫码，请在浏览器中完成…

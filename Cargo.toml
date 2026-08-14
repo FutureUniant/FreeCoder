@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+  "frontend/apps/desktop/src-tauri",
+  "frontend/crates/domain",
+  "frontend/crates/app-config",
+  "frontend/crates/app-core",
+  "frontend/crates/acp-bridge",
+  "frontend/crates/agent-process",
+  "frontend/crates/permissions",
+  "frontend/crates/session-store",
+  "frontend/crates/llm-runtime",
+  "frontend/crates/dashscope-media",
+  "frontend/crates/telemetry",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/FutureUniant/FreeCoder"
+authors = ["FreeCoder contributors"]
+
+[workspace.dependencies]
+domain = { path = "frontend/crates/domain" }
+app-config = { path = "frontend/crates/app-config" }
+app-core = { path = "frontend/crates/app-core" }
+acp-bridge = { path = "frontend/crates/acp-bridge" }
+agent-process = { path = "frontend/crates/agent-process" }
+permissions = { path = "frontend/crates/permissions" }
+session-store = { path = "frontend/crates/session-store" }
+llm-runtime = { path = "frontend/crates/llm-runtime" }
+dashscope-media = { path = "frontend/crates/dashscope-media" }
+telemetry = { path = "frontend/crates/telemetry" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "io-std", "sync", "time", "fs"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6"
+which = "7"
+base64 = "0.22"
+mime_guess = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

@@ -1,0 +1,9 @@
+[package]
+name = "telemetry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "No-op usage telemetry sink (official installer may replace this crate at pack time)"
+
+[dependencies]
+domain = { workspace = true }

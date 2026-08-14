@@ -1,0 +1,90 @@
+# Rust
+/target
+**/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Node / frontend
+node_modules/
+
+# Playwright Chromium for in-app vendor API key agent (pnpm setup:api-key)
+frontend/apps/desktop/ms-playwright/
+frontend/apps/desktop/src-tauri/resources/ms-playwright/**
+!frontend/apps/desktop/src-tauri/resources/ms-playwright/README.txt
+frontend/apps/desktop/src/vendor-key-agent/node_modules/
+# Vite output (keep a tiny tracked placeholder for tauri generate_context)
+frontend/apps/desktop/dist/*
+!frontend/apps/desktop/dist/index.html
+.vite/
+*.local
+.DS_Store
+
+# Tauri / bundling
+frontend/apps/desktop/src-tauri/gen/
+frontend/apps/desktop/src-tauri/target/
+frontend/apps/desktop/src-tauri/WixTools/
+frontend/apps/desktop/src-tauri/*.log
+frontend/apps/desktop/src-tauri/images/
+packaging/out/
+packaging/dist/
+
+# Release artifacts
+release/dist/
+release/cache/
+release/staging/
+*.dmg
+*.AppImage
+*.msi
+*.exe
+*.deb
+*.rpm
+# Bundled media MCP binary (source is not published)
+!frontend/apps/desktop/src-tauri/resources/runtime/media-mcp.exe
+
+# Bundled agent runtime artifacts (built binaries only; keep version.json tracked)
+frontend/apps/desktop/src-tauri/resources/runtime/grok
+frontend/apps/desktop/src-tauri/resources/runtime/grok.exe
+/runtime-dist/
+
+# Local LLM binaries + GGUF
+models/llama-prism-win-cuda12/**
+!models/llama-prism-win-cuda12/.gitkeep
+!models/README.md
+models/**/*.gguf
+models/**/*.dll
+models/**/*.exe
+models/**/*.so
+models/**/*.dylib
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+/tencentcloud/
+
+# Not part of this public frontend snapshot
+/backend/
+/tools/
+/packaging/
+/release/
+/tests/
+/docs/
+/models/
+/target-depcheck/
+
+# Logs / local data
+*.log
+.cache/
+tmp/
+.temp/
+
+# App chat/task metadata written into opened projects
+**/.grokx/

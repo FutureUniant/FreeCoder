@@ -65,12 +65,37 @@ Networking and vendors are adapted for mainland China. You do not need an overse
 | Mode | Cost | Network | Typical use |
 |------|------|---------|-------------|
 | **Local Bonsai** | Free | Offline OK | Coding, vision, private repos |
-| **DeepSeek** | Low domestic price | Direct in China | Strong coding (V4 Flash / Pro) |
+| **DeepSeek** | Flash simple task ~**¥0.12** | Direct in China | Strong coding (V4 Flash / Pro) |
 | **Alibaba Qwen** | Free quota + pay-as-you-go | Direct in China | LLM, multimodal, image, video |
 | xAI Grok, etc. | Usage-based | Depends on your network | Optional |
 
-DeepSeek uses the official China endpoint: inexpensive, low latency, a solid cloud default beside local inference.  
+DeepSeek uses the official China endpoint: extremely cheap, low latency, a solid cloud default beside local inference. Simple Flash tasks often cost **about ¥0.12** (see below).  
 Qwen runs through Alibaba Cloud Bailian: text, vision, image generation, and video generation in the same desktop app.
+
+## How cheap is DeepSeek
+
+Prices from DeepSeek’s official [Models & pricing](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) page, in **CNY per million tokens**.
+
+| Model | Input (cache hit) | Input (cache miss) | Output |
+|-------|-------------------|--------------------|--------|
+| **deepseek-v4-flash** | ¥0.02 | **¥1** | **¥2** |
+| deepseek-v4-pro | ¥0.025 | ¥3 | ¥6 |
+
+Use **Flash** for everyday edits: a small bugfix, a helper function, a short explanation. One agent pass is usually **under 100k tokens**.
+
+A conservative estimate with **no cache hits**:
+
+| | Tokens | Unit price | Cost |
+|--|------:|------------|-----:|
+| Input | 80,000 | ¥1 / million | **¥0.08** |
+| Output | 20,000 | ¥2 / million | **¥0.04** |
+| **Total (~100k tokens)** | 100,000 | | **¥0.12** |
+
+> **A simple coding task is about twelve cents (CNY).**  
+> ¥1 covers ~**8** such tasks; ¥10 covers on the order of **80**.  
+> This assumes every input token misses the cache. Once the conversation warms up, cache hits drop input to ¥0.02 / million.
+
+Switch to **Pro** for long refactors. Peak/off-peak pricing starts **2026-08-17**. Even at the new Flash **peak** rate, the same 100k-token job is about **¥0.42**. Always check the official page for the live tariff.
 
 ## Claim Alibaba Qwen free tokens
 
@@ -117,4 +142,4 @@ Keep API keys in local Settings. Never commit them.
 - Agent engine upstream: [Grok Build](https://github.com/xai-org/grok-build) (Apache-2.0, see [NOTICE](NOTICE))
 - Desktop shell upstream: [Grokx](https://github.com/tangf-ai/grokx)
 
-FreeCoder is not an xAI product. Grok and Grok Build are trademarks or project names of xAI. Claude Code, Cursor, and Codex belong to their respective owners. Alibaba Cloud Bailian free quota is governed by Alibaba Cloud’s official terms.
+FreeCoder is not an xAI product. Grok and Grok Build are trademarks or project names of xAI. Claude Code, Cursor, and Codex belong to their respective owners. Alibaba Cloud Bailian free quota is governed by Alibaba Cloud’s official terms. DeepSeek prices follow the [official tariff](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/).

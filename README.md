@@ -106,6 +106,14 @@ FreeCoder **支持在本机加载并运行本地模型**。不连云、不申请
 
 权限可调（需审批 / 自动 / 完全信任），多任务可在后台继续跑。
 
+## 关注公众号，提意见
+
+用微信扫描下方二维码，关注公众号后即可提交建议或问题。
+
+<p align="center">
+  <img src="assets/wechat-official-account.jpg" alt="FreeCoder 微信公众号" width="220" />
+</p>
+
 ## 许可证
 
 产品代码 [Apache-2.0](LICENSE)。Agent 引擎上游为 [Grok Build](https://github.com/xai-org/grok-build)（Apache-2.0，见 [NOTICE](NOTICE)）。

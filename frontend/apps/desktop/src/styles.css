@@ -4660,6 +4660,40 @@ html.platform-mac .settings-content-scroll {
   font-variant-numeric: tabular-nums;
 }
 
+.settings-about-feedback {
+  margin-top: 28px;
+  padding: 22px 22px 24px;
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  background: #fff;
+}
+
+.settings-about-feedback-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.settings-about-feedback-text {
+  margin: 0 0 16px;
+  max-width: 42ch;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.settings-about-qr {
+  display: block;
+  width: 200px;
+  height: 200px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  padding: 8px;
+}
+
 .settings-group-title {
   margin: 8px 0 10px;
   font-size: 15px;

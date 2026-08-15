@@ -106,6 +106,14 @@ Use the cloud when you want stronger models, image/video, or the free quota. Eve
 
 Permission modes: ask / auto / full trust. Tasks can keep running in the background.
 
+## Feedback on WeChat
+
+Scan the QR code with WeChat, follow the official account, then send suggestions or issues.
+
+<p align="center">
+  <img src="assets/wechat-official-account.jpg" alt="FreeCoder WeChat official account" width="220" />
+</p>
+
 ## License
 
 Product code [Apache-2.0](LICENSE). Agent engine upstream: [Grok Build](https://github.com/xai-org/grok-build) (Apache-2.0, see [NOTICE](NOTICE)).

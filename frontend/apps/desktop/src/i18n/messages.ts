@@ -75,6 +75,10 @@ export const en = {
     "FreeCoder is a desktop AI coding assistant for real engineering. Local models, tools, and Skills come ready together — so understanding your project, editing code, and running commands all happen on your own computer: faster, steadier, and fully under your control.",
   "settings.aboutVersion": "Version",
   "settings.aboutVersionValue": "1.0.0",
+  "settings.aboutFeedbackTitle": "Feedback",
+  "settings.aboutFeedback":
+    "Scan the QR code with WeChat, follow the official account, then send suggestions or issues.",
+  "settings.aboutWechatQrAlt": "FreeCoder WeChat official account QR code",
   "settings.depPolicy": "Download policy",
   "settings.depAutoDownload": "Auto-download on startup",
   "settings.depAutoDownloadDesc":
@@ -811,6 +815,10 @@ export const zhCN = {
     "FreeCoder 是面向真实工程的桌面 AI 编程助手。本地模型、工具调用与 Skills 一体就绪——从理解项目到改代码、跑命令，全程在你自己的机器上完成：更快、更稳、更可控。",
   "settings.aboutVersion": "版本",
   "settings.aboutVersionValue": "1.0.0",
+  "settings.aboutFeedbackTitle": "意见与反馈",
+  "settings.aboutFeedback":
+    "微信扫描下方二维码，关注公众号后即可提交建议或问题。",
+  "settings.aboutWechatQrAlt": "FreeCoder 微信公众号二维码",
   "settings.depPolicy": "下载策略",
   "settings.depAutoDownload": "启动时自动下载",
   "settings.depAutoDownloadDesc":

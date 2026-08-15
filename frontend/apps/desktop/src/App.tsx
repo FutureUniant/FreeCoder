@@ -41,6 +41,7 @@ import {
   onTitlebarMouseDown,
 } from "./windowDrag";
 import brandIcon from "./assets/brand-icon.svg";
+import wechatOfficialAccountQr from "./assets/wechat-official-account.jpg";
 import {
   detectVerbalOnlyCompletion,
   VERBAL_COMPLETION_NUDGE,
@@ -8544,6 +8545,22 @@ export default function App() {
                     {t("settings.aboutVersion")}{" "}
                     <span>{t("settings.aboutVersionValue")}</span>
                   </p>
+                  <div className="settings-about-feedback">
+                    <h2 className="settings-about-feedback-title">
+                      {t("settings.aboutFeedbackTitle")}
+                    </h2>
+                    <p className="settings-about-feedback-text">
+                      {t("settings.aboutFeedback")}
+                    </p>
+                    <img
+                      src={wechatOfficialAccountQr}
+                      alt={t("settings.aboutWechatQrAlt")}
+                      className="settings-about-qr"
+                      width={200}
+                      height={200}
+                      draggable={false}
+                    />
+                  </div>
                 </section>
               )}
             </div>

@@ -45,7 +45,7 @@ Do not want the cloud at all? Turn on local inference. **Completely free.**
 
 ## What powers the agent
 
-The coding engine is **xAI’s [Grok Build](https://github.com/xai-org/grok-build)** — the same generation of agents as [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.com), and [OpenAI Codex](https://openai.com/codex): plan, edit files, run commands, loop until done.
+The coding engine is **xAI’s [Grok Build](https://github.com/xai-org/grok-build)** — the same generation of agents as [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.com), and [OpenAI Codex](https://openai.com/codex): plan, edit files, run commands, loop until done.
 
 The desktop UI is **FreeCoder’s own frontend**. We localized it for China: **double-click install**, domestic models by default, engine capability on par with upstream — not a chat skin.
 

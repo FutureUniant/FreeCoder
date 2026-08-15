@@ -45,7 +45,7 @@
 
 ## 后端是谁做的
 
-编码引擎来自 **xAI 的 [Grok Build](https://github.com/xai-org/grok-build)**，和 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Cursor](https://cursor.com)、[OpenAI Codex](https://openai.com/codex) 同属一代 Agent：规划、改文件、执行命令、循环直到做完。
+编码引擎来自 **xAI 的 [Grok Build](https://github.com/xai-org/grok-build)**，和 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）、[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Cursor](https://cursor.com)、[OpenAI Codex](https://openai.com/codex) 同属一代 Agent：规划、改文件、执行命令、循环直到做完。
 
 桌面是 **FreeCoder 自己的前端**。我们做了国产化适配：**双击安装就能用**，默认走国内模型，引擎能力与上游一致，不是换一套「套皮聊天」。
 
